@@ -19,8 +19,13 @@ package com.flipkart.poseidon.serviceclients;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.flipkart.phantom.task.spi.TaskResult;
 import com.flipkart.poseidon.handlers.http.HttpResponseDecoder;
 import com.flipkart.poseidon.handlers.http.utils.StringUtils;
+import io.netty.buffer.ByteBufInputStream;
+import io.vertx.core.Future;
+import io.vertx.core.MultiMap;
+import io.vertx.core.buffer.Buffer;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.Header;
 import org.apache.http.HttpResponse;
@@ -29,6 +34,7 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Created by mohan.pandian on 18/03/15.
@@ -153,6 +159,80 @@ public class ServiceResponseDecoder<T> implements HttpResponseDecoder<ServiceRes
                 return new ServiceResponse<T>(serviceClientException, headers);
             }
         }
+    }
+
+    public void decodeAndComplete(io.vertx.ext.web.client.HttpResponse<Buffer> httpResponse, Future future, CompletableFuture<TaskResult> result) {
+        Map<String, String> headers = getHeaders(httpResponse.headers());
+        collectedHeaders.forEach((k, v) -> Optional.ofNullable(localCollectedHeaders.get(k)).ifPresent(v::addAll));
+        int statusCode = httpResponse.statusCode();
+        String statusCodeString = String.valueOf(statusCode);
+        if (statusCode >= 200 && statusCode <= 299) {
+            if (statusCode == 204) {
+                result.complete(new TaskResult<>(true, null, new ServiceResponse<>( null, headers)));
+                future.complete();
+            } else {
+                try {
+                    // Don't deserialize a plain string response using jackson
+                    final ServiceResponseInfo serviceResponseInfo = serviceResponseInfoMap.get(String.valueOf(statusCode));
+                    final JavaType javaType;
+                    if (serviceResponseInfo != null) {
+                        javaType = serviceResponseInfo.getType();
+                    } else {
+                        javaType = serviceResponseInfoMap.get("200").getType();
+                    }
+
+                    result.complete(new TaskResult<>(true, null, new ServiceResponse<>(new ByteBufInputStream(httpResponse.body().getByteBuf()), headers)));
+                    future.complete();
+                } catch (Exception e) {
+                    logger.error("Error de-serializing response object exception: {}", e.getMessage());
+                    result.completeExceptionally(new IOException("Response object de-serialization error", e));
+                    future.fail("");
+                }
+            }
+        } else {
+            String serviceResponse = httpResponse.bodyAsString();
+            Object errorResponse = null;
+            ServiceResponseInfo responseInfo = Optional.ofNullable(serviceResponseInfoMap.get(statusCodeString)).orElseGet(() -> serviceResponseInfoMap.get("default"));
+            JavaType errorType = responseInfo.getType();
+            if (errorType != null) {
+                try {
+                    errorResponse = objectMapper.readValue(serviceResponse, errorType);
+                } catch (Exception e) {
+                    logger.warn("Error while de-serializing non 200 response to given errorType statusCode:{} exception: {}", statusCodeString, e.getMessage());
+                }
+            }
+
+            Class<? extends ServiceClientException> exceptionClass = responseInfo.getExceptionClass();
+
+            String exceptionMessage = statusCodeString + " " + serviceResponse;
+            try {
+                ServiceClientException serviceClientException = exceptionClass.getConstructor(String.class, Object.class).newInstance(exceptionMessage, errorResponse);
+                if (statusCode >= 500 && statusCode <= 599) {
+                    // 5xx errors have to be treated as hystrix command failures. Hence throw service client exception.
+                    logger.error("Non 200 response statusCode: {} response: {}", statusCodeString, serviceResponse);
+                    result.completeExceptionally(serviceClientException);
+                    future.fail("");
+                } else {
+                    // Rest of non 2xx don't have to be treated as hystrix command failures (ex: validation failure resulting in 400)
+                    logger.debug("Non 200 response statusCode: {} response: {}", statusCodeString, serviceResponse);
+                    result.complete(new TaskResult<>(true, null, new ServiceResponse<T>(serviceClientException, headers)));
+                    future.complete();
+                }
+            } catch (Exception e) {
+                result.completeExceptionally(e);
+                future.fail("");
+            }
+        }
+    }
+
+    private Map<String, String> getHeaders(MultiMap headerMap) {
+        Map<String, String> headers = new HashMap<>();
+        if (headerMap != null) {
+            headerMap.forEach(header -> {
+                headers.put(header.getKey(), header.getValue());
+            });
+        }
+        return headers;
     }
 
     @Override
