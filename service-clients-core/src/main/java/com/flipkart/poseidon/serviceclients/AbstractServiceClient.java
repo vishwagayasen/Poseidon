@@ -72,6 +72,9 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
     //Static Strings
     protected static final String GET = "GET";
     protected static final String POST = "POST";
+    protected static final String PUT = "PUT";
+    protected static final String PATCH = "PUT";
+    protected static final String DELETE = "DELETE";
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -140,6 +143,7 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
                 throw new IOException("Headers serialization error", e);
             }
         }
+        boolean enableVertx = injectedHeadersMap.containsKey("enable-vertx");
 
         byte[] payload = null;
         if (requestObject != null) {
@@ -176,14 +180,12 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
                         serviceResponseInfoMap, ServiceContext.getCollectedHeaders());
 
         final Boolean throwOriginal = ServiceContext.get(ServiceClientConstants.THROW_ORIGINAL);
-        FutureTaskResultToDomainObjectPromiseWrapper<T> futureWrapper = null;
-        if (!vertxHttpClientMap.get(commandName).isClientCreated()) {
-            Future<TaskResult> future = taskContext.executeAsyncCommand(commandName, payload,
-                    params, serviceResponseDecoder);
-            futureWrapper = new FutureTaskResultToDomainObjectPromiseWrapper<>(future, Optional.ofNullable(throwOriginal).orElse(false));
-
+        FutureTaskResultToDomainObjectPromiseWrapper<T> futureWrapper;
+        if (vertxHttpClientMap.get(commandName).isClientCreated() && enableVertx) {
+            futureWrapper = getVertxFutureWrapper(commandName, injectedHeadersMap, properties, serviceResponseDecoder, javaType);
         } else {
-            futureWrapper = getVertxFutureWrapper(commandName, injectedHeadersMap, properties, serviceResponseDecoder);
+            Future<TaskResult> future = taskContext.executeAsyncCommand(commandName, payload, params, serviceResponseDecoder);
+            futureWrapper = new FutureTaskResultToDomainObjectPromiseWrapper<>(future, Optional.ofNullable(throwOriginal).orElse(false));
         }
         if (ServiceContext.isDebug()) {
             properties.setHeadersMap(injectedHeadersMap);
@@ -194,10 +196,10 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
     }
 
     private <T> FutureTaskResultToDomainObjectPromiseWrapper<T> getVertxFutureWrapper(String commandName, Map<String, String> injectedHeadersMap
-            , ServiceExecuteProperties properties, ServiceResponseDecoder<T> serviceResponseDecoder) {
+            , ServiceExecuteProperties properties, ServiceResponseDecoder<T> serviceResponseDecoder, JavaType javaType) {
         VertxHttpClient vertxHttpClient = vertxHttpClientMap.get(commandName);
         CompletableFuture<TaskResult> result = new CompletableFuture<>();
-        FutureTaskResultToDomainObjectPromiseWrapper<T> futureWrapper = new FutureTaskResultToDomainObjectPromiseWrapper<>(result, false);
+        FutureTaskResultToDomainObjectPromiseWrapper<T> futureWrapper = new FutureTaskResultToDomainObjectPromiseWrapper<>(result, getObjectMapper(), javaType);
         vertxHttpClient.getCircuitBreaker().execute(future -> {
             if (GET.equals(properties.getHttpMethod())) {
                 HttpRequest<Buffer> request = vertxHttpClient.getClient().get(vertxHttpClient.getPort(), vertxHttpClient.getHost(), properties.getUri());
@@ -233,18 +235,19 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
         }
     }
 
-    private void initClient(String commandName) {
-        if (TaskContextFactory.getTaskContext() == null) {
+    private synchronized void initClient(String commandName) {
+        if (TaskContextFactory.getTaskContext() == null || vertxHttpClientMap.get(commandName) != null) {
             return;
         }
         TaskHandlerExecutorRepository taskHandlerExecutorRepository = ((TaskContextImpl) TaskContextFactory.getTaskContext()).getExecutorRepository();
         TaskHandler baseTaskHandler = ((TaskHandlerRegistry)taskHandlerExecutorRepository.getRegistry()).getTaskHandlerByCommand(commandName);
-        if (baseTaskHandler != null && baseTaskHandler instanceof SinglePoolHttpTaskHandler) {
+        if (baseTaskHandler instanceof SinglePoolHttpTaskHandler) {
             SinglePoolHttpTaskHandler taskHandler = (SinglePoolHttpTaskHandler) baseTaskHandler;
             WebClientOptions webClientOptions = new WebClientOptions().setKeepAlive(true).setUserAgentEnabled(false)
                     .setMaxPoolSize(200)
                     .setConnectTimeout(taskHandler.getConnectionTimeout())
                     .setMetricsName(commandName).setIdleTimeoutUnit(TimeUnit.MILLISECONDS)
+                    .setTryUseCompression(taskHandler.isRequestCompressionEnabled())
                     .setIdleTimeout(taskHandler.getOperationTimeout() + 100);
             WebClient client = WebClient.create(VertxManager.getVertx(), webClientOptions);
             CircuitBreaker circuitBreaker = CircuitBreaker.create(commandName, VertxManager.getVertx(),

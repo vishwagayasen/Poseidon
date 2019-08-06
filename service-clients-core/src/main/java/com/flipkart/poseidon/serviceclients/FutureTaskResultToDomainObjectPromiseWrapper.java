@@ -16,11 +16,15 @@
 
 package com.flipkart.poseidon.serviceclients;
 
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.flipkart.phantom.task.spi.TaskResult;
 import com.flipkart.poseidon.serviceclients.batch.ResponseMerger;
 import flipkart.lego.concurrency.api.Promise;
 import flipkart.lego.concurrency.api.PromiseListener;
 import flipkart.lego.concurrency.exceptions.PromiseBrokenException;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufInputStream;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 
 import java.util.ArrayList;
@@ -40,9 +44,17 @@ public class FutureTaskResultToDomainObjectPromiseWrapper<DomainObject> implemen
     private final List<Future<TaskResult>> futureList = new ArrayList<>();
     private ResponseMerger<DomainObject> responseMerger;
     private final boolean throwOriginalException;
+    private ObjectMapper objectMapper;
+    private JavaType javaType;
 
     public FutureTaskResultToDomainObjectPromiseWrapper(Future<TaskResult> future) {
         this(future, false);
+    }
+
+    public FutureTaskResultToDomainObjectPromiseWrapper(Future<TaskResult> future, ObjectMapper objectMapper, JavaType javaType) {
+        this(future, false);
+        this.objectMapper = objectMapper;
+        this.javaType = javaType;
     }
 
     public FutureTaskResultToDomainObjectPromiseWrapper(Future<TaskResult> future, boolean throwOriginalException) {
@@ -119,21 +131,21 @@ public class FutureTaskResultToDomainObjectPromiseWrapper<DomainObject> implemen
     @Override
     public DomainObject get() throws PromiseBrokenException, InterruptedException {
         try {
-            ServiceResponse<DomainObject> serviceResponse = new ServiceResponse<>();
+            ServiceResponse serviceResponse = new ServiceResponse<>();
             for (Future<TaskResult> futureResult : futureList) {
                 TaskResult result = futureResult.get();
                 if (result == null) {
                     throw new PromiseBrokenException("Task result is null");
                 }
-                ServiceResponse<DomainObject> response = (ServiceResponse<DomainObject>) result.getData();
+                ServiceResponse response = (ServiceResponse) result.getData();
                 if (!response.getIsSuccess())
                     throw response.getException();
                 serviceResponse.addData(response.getDataList());
             }
-            if (responseMerger != null) {
-                return responseMerger.mergeResponse(serviceResponse.getDataList());
+            if (serviceResponse.getDataList().get(0) instanceof ByteBuf) {
+                return objectMapper.readValue(new ByteBufInputStream((ByteBuf)serviceResponse.getDataList().get(0)), javaType);
             } else {
-                return serviceResponse.getDataList().get(0);
+                return (DomainObject) serviceResponse.getDataList().get(0);
             }
         } catch (ExecutionException exception) {
             checkAndThrowServiceClientException(exception);
@@ -141,6 +153,8 @@ public class FutureTaskResultToDomainObjectPromiseWrapper<DomainObject> implemen
             throw new InterruptedException(exception.getMessage());
         } catch (CancellationException exception) {
             throw new PromiseBrokenException(exception);
+        } catch (Exception exception) {
+            return null;
         }
     }
 

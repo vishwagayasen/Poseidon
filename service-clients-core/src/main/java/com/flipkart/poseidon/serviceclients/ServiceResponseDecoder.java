@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.flipkart.phantom.task.spi.TaskResult;
 import com.flipkart.poseidon.handlers.http.HttpResponseDecoder;
 import com.flipkart.poseidon.handlers.http.utils.StringUtils;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufInputStream;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
@@ -181,7 +182,20 @@ public class ServiceResponseDecoder<T> implements HttpResponseDecoder<ServiceRes
                         javaType = serviceResponseInfoMap.get("200").getType();
                     }
 
-                    result.complete(new TaskResult<>(true, null, new ServiceResponse<>(new ByteBufInputStream(httpResponse.body().getByteBuf()), headers)));
+                    if (javaType == null) {
+                        result.complete(new TaskResult<>(true, null, new ServiceResponse<T>((T) null, headers)));
+                        future.complete();
+                        return;
+                    }
+                    /*
+                    if (byte[].class.isAssignableFrom(javaType.getRawClass())) {
+                        result.complete(new TaskResult<>(true, null, new ServiceResponse<T>((T) httpResponse.bodyAsString().getBytes(), headers)));
+                        future.complete();
+                        return;
+                    }
+                    result.complete(new TaskResult<>(true, null, new ServiceResponse<>(objectMapper.<T>readValue(new ByteBufInputStream(httpResponse.body().getByteBuf()), javaType), headers)));
+                    */
+                    result.complete(new TaskResult<>(true, null, new ServiceResponse<>(httpResponse.body().getByteBuf(), headers)));
                     future.complete();
                 } catch (Exception e) {
                     logger.error("Error de-serializing response object exception: {}", e.getMessage());
