@@ -185,18 +185,16 @@ public class ServiceResponseDecoder<T> implements HttpResponseDecoder<ServiceRes
                     if (javaType == null) {
                         result.complete(new TaskResult<>(true, null, new ServiceResponse<T>((T) null, headers)));
                         future.complete();
-                        return;
-                    }
-                    /*
-                    if (byte[].class.isAssignableFrom(javaType.getRawClass())) {
+                    } else if (String.class.isAssignableFrom(javaType.getRawClass())) {
+                        result.complete(new TaskResult<>(true, null, new ServiceResponse<T>((T) httpResponse.bodyAsString(), headers)));
+                        future.complete();
+                    } else if (byte[].class.isAssignableFrom(javaType.getRawClass())) {
                         result.complete(new TaskResult<>(true, null, new ServiceResponse<T>((T) httpResponse.bodyAsString().getBytes(), headers)));
                         future.complete();
-                        return;
+                    } else {
+                        result.complete(new TaskResult<>(true, null, new ServiceResponse<>(objectMapper.<T>readValue(new ByteBufInputStream(httpResponse.body().getByteBuf()), javaType), headers)));
+                        future.complete();
                     }
-                    result.complete(new TaskResult<>(true, null, new ServiceResponse<>(objectMapper.<T>readValue(new ByteBufInputStream(httpResponse.body().getByteBuf()), javaType), headers)));
-                    */
-                    result.complete(new TaskResult<>(true, null, new ServiceResponse<>(httpResponse.body().getByteBuf(), headers)));
-                    future.complete();
                 } catch (Exception e) {
                     logger.error("Error de-serializing response object exception: {}", e.getMessage());
                     result.completeExceptionally(new IOException("Response object de-serialization error", e));

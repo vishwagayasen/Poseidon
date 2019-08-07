@@ -73,7 +73,7 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
     protected static final String GET = "GET";
     protected static final String POST = "POST";
     protected static final String PUT = "PUT";
-    protected static final String PATCH = "PUT";
+    protected static final String PATCH = "PATCH";
     protected static final String DELETE = "DELETE";
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -207,6 +207,18 @@ public abstract class AbstractServiceClient<R extends TaskHandler> implements Se
                 request.send(ar->responseHandler(ar, future, result, serviceResponseDecoder));
             } else if (POST.equals(properties.getHttpMethod())) {
                 HttpRequest<Buffer> request = vertxHttpClient.getClient().post(vertxHttpClient.getPort(), vertxHttpClient.getHost(), properties.getUri());
+                addHeaders(request.headers(), injectedHeadersMap);
+                request.sendJson(properties.getRequestObject(), ar->responseHandler(ar, future, result, serviceResponseDecoder));
+            } else if (PUT.equals(properties.getHttpMethod())) {
+                HttpRequest<Buffer> request = vertxHttpClient.getClient().put(vertxHttpClient.getPort(), vertxHttpClient.getHost(), properties.getUri());
+                addHeaders(request.headers(), injectedHeadersMap);
+                request.sendJson(properties.getRequestObject(), ar->responseHandler(ar, future, result, serviceResponseDecoder));
+            } else if (PATCH.equals(properties.getHttpMethod())) {
+                HttpRequest<Buffer> request = vertxHttpClient.getClient().patch(vertxHttpClient.getPort(), vertxHttpClient.getHost(), properties.getUri());
+                addHeaders(request.headers(), injectedHeadersMap);
+                request.sendJson(properties.getRequestObject(), ar->responseHandler(ar, future, result, serviceResponseDecoder));
+            } else if (DELETE.equals(properties.getHttpMethod())) {
+                HttpRequest<Buffer> request = vertxHttpClient.getClient().delete(vertxHttpClient.getPort(), vertxHttpClient.getHost(), properties.getUri());
                 addHeaders(request.headers(), injectedHeadersMap);
                 request.sendJson(properties.getRequestObject(), ar->responseHandler(ar, future, result, serviceResponseDecoder));
             }
